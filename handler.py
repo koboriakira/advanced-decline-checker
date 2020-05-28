@@ -1,73 +1,104 @@
 import json
-from datetime import date
+import datetime
 from bs4 import BeautifulSoup
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
+import chromedriver_binary
 import time
-import request
+import requests
+import logging
+from typing import Union
+import os
+from os.path import join, dirname
+from dotenv import load_dotenv
 
+load_dotenv(verbose=True)
+
+dotenv_path = join(dirname(__file__), '.env')
+load_dotenv(dotenv_path)
+
+TODAY = datetime.date.today()
+logging.basicConfig(filename='logger.log',level=logging.WARN)
 
 def hello(event, context):
+    is_success = execute()
+    if is_success:
+        return {"statusCode": 200}
+    return {"statusCode": 500}
+
+def execute() -> bool:
     try:
-        ratio_service = RatioService()
-        ratio_of_ten_days_average = ratio_service.get_today_ratio()
-        message_service = MessageService(ratio_of_ten_days_average)
-        message_service.post()
+        advancec_decline_ratio = RatioService().get_today_ratio()
+        if advancec_decline_ratio.is_valid():
+            message = advancec_decline_ratio.generate_message()
+            MessageService(message).post()
+        return True
     except Exception as e:
-        return {
-            'statusCode': 500,
-            'body': str(e)
-        }
+        logging.error(e)
+        return False
 
-    return {
-        "statusCode": 200,
-    }
+class AdvancedDeclineRatio(object):
+    def __init__(self, val) -> None:
+        self.val = val
 
+    def is_valid(self) -> bool:
+        return self.val
+
+    def generate_message(self) -> str:
+        return f"【{TODAY}】\n騰落レシオ(10日平均): {self.val}%"
 
 class RatioService(object):
 
-    URL = 'https://nikkeiyosoku.com/up_down_ratio/'
-    BUSINESS_DAYS = 10
+    def __init__(self) -> None:
+        # 独自のrequestsをつくる。今回はヘッドレスなGoogleChromeを利用
+        self.requests = RequestService()
 
-    def get_today_ratio(self):
-        today = date.fromisoformat('2020-05-01')
-
-        # ブラウザのオプションを格納する変数をもらってきます。
-        # Headlessモードを有効にする（コメントアウトするとブラウザが実際に立ち上がります）
-        options = Options()
-        options.set_headless(True)
-
-        # ブラウザを起動してアクセスする
-        driver = webdriver.Chrome(chrome_options=options)
-        driver.get("https://nikkei225jp.com/data/touraku.php")
-
-        # HTMLを文字コードをUTF-8に変換してから取得します
-        html = driver.page_source.encode('utf-8')
-
-        # BeautifulSoupで扱えるようにパースします
+    def get_today_ratio(self) -> AdvancedDeclineRatio:
+        html = self.requests.get('https://nikkei225jp.com/data/touraku.php')
         soup = BeautifulSoup(html, "html.parser")
         rows = soup.select('#datatbl tr')
+        return self._find_today_ratio(rows)
 
-        for i in range(1, 31):
-            row = rows[i]
-            columns = row.select('td')
-            date_column = date.fromisoformat(columns[0].text)
-            if date_column == today:
+    def _find_today_ratio(self, rows) -> AdvancedDeclineRatio:
+        # なぜかスクレイピングしたときの日付が1日異なる（18:29現在）ため、比較条件のほうは1日ズラす
+        cond = TODAY - datetime.timedelta(days=1) # => datetime.datetime(2019, 7, 23, 1, 59, 33, 338054)# 10時間
+        for i in range(1,31):
+            columns = rows[i].select('td')
+            date_column = datetime.date.fromisoformat(columns[0].text)
+            if date_column == cond:
                 ratio_of_ten_days_average = columns[8].text
-                return float(ratio_of_ten_days_average)
-        return False
+                return AdvancedDeclineRatio(float(ratio_of_ten_days_average))
+        return AdvancedDeclineRatio(False)
+
+class RequestService(object):
+    def __init__(self) -> None:
+        options = Options()
+        # バイナリのディレクトリを指定
+        options.binary_location = '/usr/bin/google-chrome'
+        # Headlessモード、no-sandboxモードを有効にする（コメントアウトするとブラウザが実際に立ち上がります）
+        options.add_argument('--headless')
+        options.add_argument('--no-sandbox')
+
+        # ブラウザを起動する
+        driver = webdriver.Chrome(options=options)
+        self.driver = driver
+
+    def get(self, url) -> str:
+        self.driver.get(url)
+
+        # HTMLを文字コードをUTF-8に変換してから取得します
+        html = self.driver.page_source.encode('utf-8')
+        return html
 
 
 class MessageService(object):
-    # .envで管理する予定
-    SLACK_INCOMING_WEBHOOK = 'dummy'
-
-    def __init__(self, ratio):
-        self.ratio = ratio
+    def __init__(self, message:str) -> None:
+        self.message = message
 
     def post(self):
-        text = f"騰落レシオ(10日平均): {self.ratio}%"
         json = {
-            'text': text
+            'text': self.message
         }
-        requests.post(SLACK_INCOMING_WEBHOOK, json=json)
+        requests.post(os.environ.get("SLACK_INCOMING_WEBHOOK"), json=json)
+
+execute()

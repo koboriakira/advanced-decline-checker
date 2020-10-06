@@ -1,0 +1,17 @@
+version: '3'
+services:
+  app:
+    build: .
+    ports:
+      - '8005:8080'
+    volumes:
+      - ./advanced_decline_checker:/work/advanced_decline_checker
+      # Firestoreなどを利用する場合は認証キーを入れる
+      # - ./credentials.json:/work/credentials.json
+    environment:
+      - SLACK_INVESTMENT_WEBHOOK=https://hooks.slack.com/services/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
+    command: >
+      uvicorn advanced_decline_checker.main:app
+      --host 0.0.0.0
+      --port 8080
+      --reload

@@ -1,31 +1,30 @@
-# docker build -t adv_dev_checker_image .
-FROM python:3.7.5-slim
+FROM python:3.8.5-slim
 
 # 必要なパッケージをインストール
 RUN apt-get update \
   && apt-get -y upgrade \
-  && apt-get install -y wget unzip curl
-  # gcc
+  && apt-get install -y wget unzip curl gnupg
+# 下の4つはGoogle ChromeDriverに必要なパッケージ
+# libgconf-2-4 libnss3 libx11-6 libx11-xcb1
 
-WORKDIR work
+# Google Chrome ver86をインストール。Beta版にしか86がなかった
+RUN echo "deb http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list && \
+  wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - && \
+  apt-get update && \
+  apt-get install -y google-chrome-beta
 
-# GoogleChorme,Chromedriveと依存パッケージをインストール
-# 一度失敗させて、依存関係のあるパッケージを出しておく
-RUN wget https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb \
-  && dpkg -i google-chrome-stable_current_amd64.deb; exit 0
+WORKDIR /work
 
-# もう一度。今度はchromedriverも入れる
-RUN apt-get update \
-  && apt-get -f install -y \
-  && dpkg -i google-chrome-stable_current_amd64.deb \
-  && curl -O https://chromedriver.storage.googleapis.com/83.0.4103.39/chromedriver_linux64.zip \
-  && unzip chromedriver_linux64.zip \
-  && mv chromedriver /usr/local/bin/
+ADD Pipfile /work/Pipfile
+ADD Pipfile.lock /work/Pipfile.lock
+RUN pip install --upgrade pip && \
+  pip install pipenv && \
+  pipenv lock -r > requirements.txt && \
+  pip install --no-cache-dir -r requirements.txt
 
-ADD requirements.txt requirements.txt
-ADD handler.py handler.py
-ADD .env .env
+# ENV PATH $PATH:/usr/local/lib/python3.8/site-packages/chromedriver_binary
+# RUN echo $PATH
 
-RUN pip install -r requirements.txt
+ADD advanced_decline_checker /work/advanced_decline_checker
 
-CMD 'bin/bash'
+CMD ["uvicorn", "advanced_decline_checker.main:app", "--host", "0.0.0.0", "--port", "8080"]

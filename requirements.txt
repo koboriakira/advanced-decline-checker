@@ -1,5 +1,0 @@
-bs4
-selenium
-requests
-chromedriver-binary
-python-dotenv
